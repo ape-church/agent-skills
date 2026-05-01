@@ -1,7 +1,7 @@
 ---
 name: ape-church-gambler
 description: Autonomous gambling skill for ApeChain. Play casino games, manage bankroll, compete in contests.
-version: 1.2.0
+version: 1.3.0
 homepage: https://ape.church
 metadata: {"emoji": "🦍", "category": "gaming", "chain": "apechain"}
 tools:
@@ -9,6 +9,10 @@ tools:
     cmd: apechurch play [game] [amount] [config...] --json
   - name: play_loop
     cmd: apechurch play --loop --json
+  - name: play_bonus_buy
+    cmd: apechurch play <cascading-slot> <amount> --bonus-buy --json
+  - name: play_crash
+    cmd: apechurch play speed-crash <amount> <multiplier> --json
   - name: blackjack
     cmd: apechurch blackjack <amount> --auto --json
   - name: video_poker
@@ -77,6 +81,7 @@ apechurch play --loop
 | Game | Command | Type | Key Parameters |
 |------|---------|------|----------------|
 | ApeStrong | `play ape-strong 10 50` | Dice | `--range 5-95` |
+| Speed Crash | `play speed-crash 10 2.5` | Crash | `--multiplier 1.01-10000` |
 | Roulette | `play roulette 10 RED` | Table | `--bet RED,BLACK,0-36,00` |
 | Baccarat | `play baccarat 10 BANKER` | Table | `--bet PLAYER,BANKER,TIE` |
 | Jungle Plinko | `play jungle-plinko 10 2 50` | Plinko | `--mode 0-4` `--balls 1-100` |
@@ -84,6 +89,9 @@ apechurch play --loop
 | Speed Keno | `play speed-keno 10` | Keno | `--picks 1-5` `--games 1-20` |
 | Dino Dough | `play dino-dough 10 10` | Slots | `--spins 1-15` |
 | Bubblegum Heist | `play bubblegum-heist 10 10` | Slots | `--spins 1-15` |
+| Reel Pirates | `play reel-pirates 25 10` | Cascade Slot | `--spins 1-15` (≥ 2.5 APE/spin) |
+| Blizzard Blitz | `play blizzard-blitz 25 10` | Cascade Slot | `--spins 1-20` `--bonus-buy` (≥ 2.5 APE/spin) |
+| Gimboz Of The Galaxy | `play gotg 30 10` | Cascade Slot | `--spins 1-10` `--bonus-buy` (≥ 3 APE/spin) |
 | Monkey Match | `play monkey-match 10` | Match | `--mode 1-2` |
 | Bear-A-Dice | `play bear-dice 10` | Dice | `--difficulty 0-4` `--rolls 1-5` |
 | Blackjack | `blackjack 10 --auto` | Cards | Interactive or `--auto` |
@@ -111,6 +119,35 @@ apechurch play ape-strong 10 75      # 75% chance, 1.3x payout
 | 95 | 95% | 1.025x |
 
 **Aliases:** `strong`, `dice`, `limbo`
+
+---
+
+### Speed Crash (Crash Game)
+
+Pick a target multiplier (1.01x to 10,000x). Cash out at your target before the curve crashes. Higher target = lower hit chance, bigger payout.
+
+```bash
+apechurch play speed-crash <amount> <multiplier>
+apechurch play speed-crash 10 1.5    # ~66% hit, frequent small wins
+apechurch play speed-crash 10 2      # ~50% hit, even-money
+apechurch play speed-crash 10 5      # ~20% hit, higher variance
+apechurch play speed-crash 10 100    # ~1% hit, lottery mode
+apechurch play speed-crash 10 2.5x   # "x" suffix also accepted
+```
+
+The result includes the actual `crash_multiplier` so you can see your near-misses and big wins.
+
+| Multiplier | Approx Hit Chance | Notes |
+|------------|------------------|-------|
+| 1.01x | ~98% | Floor — minimum allowed |
+| 1.5x | ~66% | Conservative |
+| 2x | ~50% | Coin flip |
+| 5x | ~20% | High variance |
+| 10x | ~10% | High risk |
+| 100x | ~1% | Lottery |
+| 10,000x | ~0.01% | Ceiling |
+
+**Aliases:** `crash`, `glyder`, `glyder-crash`
 
 ---
 
@@ -246,6 +283,77 @@ apechurch play bubblegum-heist 10 15 # 10 APE, 15 spins
 
 ---
 
+### Reel Pirates (Cascading Slot)
+
+Cascading slot with a 5-free-spin bonus round. Cascades give near-infinite payout potential — high variance.
+
+```bash
+apechurch play reel-pirates <amount> <spins>
+apechurch play reel-pirates 25 10    # 25 APE, 10 spins (2.5 APE/spin minimum)
+apechurch play reel-pirates 50 5     # 50 APE, 5 spins (10 APE/spin)
+```
+
+| Parameter | Range | Description |
+|-----------|-------|-------------|
+| spins | 1-15 | Spins per bet (wager split) |
+
+**Per-spin minimum:** 2.5 APE — for 10 spins you need at least 25 APE total.
+**Executor fee:** 0.04 APE/spin (paid on top of the wager).
+**Settlement:** Up to 60 seconds (cascades take longer than typical games).
+
+**Aliases:** `pirates`, `reel`
+
+---
+
+### Blizzard Blitz (Cascading Slot + Bonus Buy)
+
+Same family as Reel Pirates, plus the ability to BUY into the bonus round directly.
+
+```bash
+apechurch play blizzard-blitz <amount> <spins>
+apechurch play blizzard-blitz 25 10            # 25 APE, 10 spins (normal mode)
+apechurch play blizzard-blitz 100 --bonus-buy  # Buy bonus round (1 spin, ≥ 100 APE)
+apechurch play blizzard-blitz 100 bonus        # "bonus" keyword shortcut
+```
+
+| Parameter | Range | Description |
+|-----------|-------|-------------|
+| spins | 1-20 | Spins per bet (wager split) |
+| `--bonus-buy` | flag | Buy directly into bonus round (forces 1 spin) |
+
+**Per-spin minimum:** 2.5 APE.
+**Bonus-buy minimum:** 100 APE (forces 1 spin; the bet is divided by 32x for the underlying spin math).
+**Executor fee:** 0.04 APE/spin.
+**Settlement:** Up to 60 seconds.
+
+**Aliases:** `blizzard`, `blitz`, `bb`
+
+---
+
+### Gimboz Of The Galaxy (Cascading Slot — Lower Variance)
+
+Lower-variance cousin of Blizzard Blitz. Capped at 10 spins, higher per-spin minimum.
+
+```bash
+apechurch play gotg <amount> <spins>
+apechurch play gotg 30 10              # 30 APE, 10 spins (3 APE/spin minimum)
+apechurch play gotg 100 --bonus-buy    # Buy bonus round (1 spin, ≥ 100 APE)
+```
+
+| Parameter | Range | Description |
+|-----------|-------|-------------|
+| spins | 1-10 | Spins per bet (wager split) |
+| `--bonus-buy` | flag | Buy directly into bonus round (forces 1 spin) |
+
+**Per-spin minimum:** 3 APE — higher than the other cascading slots.
+**Bonus-buy minimum:** 100 APE.
+**Executor fee:** 0.05 APE/spin — highest of the cascading slots.
+**Settlement:** Up to 60 seconds.
+
+**Aliases:** `gimboz`, `galaxy`
+
+---
+
 ### Monkey Match
 
 Monkeys pop from barrels — form poker hands!
@@ -288,6 +396,8 @@ apechurch play bear-dice 10 --difficulty 0 --rolls 5
 | Rolls | Effect |
 |-------|--------|
 | 1-5 | More rolls = higher payout, more chances to lose |
+
+Difficulty 3 (Extreme) and 4 (Master) cap rolls at 3 (contract limit).
 
 **Aliases:** `bear`, `bd`
 
@@ -345,6 +455,8 @@ apechurch play ape-strong 10 50 --loop --target 200 --stop-loss 50 --max-games 1
 
 ⏳ Next game in 3s | 💰 Balance: 109.50 APE (+9.50)
 ```
+
+For Speed Crash, the suffix `(crashed at 1.45x)` is appended to win/loss lines so you can see where the curve actually crashed.
 
 ---
 
@@ -535,6 +647,8 @@ apechurch video-poker payouts  # Show payout table
 | `--max-games <n>` | Stop after N games |
 | `--bet-strategy <name>` | Betting strategy |
 | `--max-bet <ape>` | Maximum bet cap |
+| `--bonus-buy` | Buy bonus round (Blizzard Blitz, GOTG) |
+| `--multiplier <m>` | Speed Crash target multiplier |
 
 ---
 
@@ -548,9 +662,10 @@ All commands support `--json` for machine-readable output.
 {
   "address": "0x1234...abcd",
   "balance": "52.4500",
-  "gp": "150",
   "available_ape": "51.4500",
   "gas_reserve_ape": "1.0000",
+  "gp_balance": "150",
+  "house_balance": "0",
   "paused": false,
   "persona": "balanced",
   "username": "MY_AGENT",
@@ -558,7 +673,9 @@ All commands support `--json` for machine-readable output.
 }
 ```
 
-### Play Response
+`gp_balance` reads from the v2 GP token contract (`0x0382...0b93`). Anything held on the deprecated v1 contract (`0x8046...78CD`) is not surfaced.
+
+### Play Response (standard game)
 
 ```json
 {
@@ -573,9 +690,62 @@ All commands support `--json` for machine-readable output.
     "approxPayout": "1.95x"
   },
   "result": {
-    "payout_ape": "19.50",
+    "buy_in_wei": "10000000000000000000",
+    "buy_in_ape": "10",
+    "payout_wei": "19500000000000000000",
+    "payout_ape": "19.5",
     "won": true,
     "pnl_ape": "9.500000"
+  }
+}
+```
+
+### Play Response (Speed Crash — adds crash detail)
+
+```json
+{
+  "status": "complete",
+  "game": "speed-crash",
+  "tx": "0x...",
+  "game_url": "...",
+  "wager_ape": "10.000000",
+  "config": {
+    "multiplier": 2.5,
+    "target": "2.5x",
+    "approxHitChance": "39.6%"
+  },
+  "result": {
+    "buy_in_ape": "10",
+    "payout_ape": "0",
+    "target_multiplier": "2.5x",
+    "crash_multiplier": "1.42x",
+    "hit": false,
+    "won": false,
+    "pnl_ape": "-10.000000"
+  }
+}
+```
+
+### Play Response (cascading slots — includes executor fee)
+
+```json
+{
+  "status": "complete",
+  "game": "blizzard-blitz",
+  "tx": "0x...",
+  "wager_ape": "25.000000",
+  "config": {
+    "spins": 10,
+    "bonusBuy": false
+  },
+  "result": {
+    "buy_in_ape": "25",
+    "payout_ape": "37.5",
+    "vrf_fee_ape": "0.045",
+    "executor_fee_ape": "0.4",
+    "total_value_ape": "25.445",
+    "won": true,
+    "pnl_ape": "12.500000"
   }
 }
 ```
@@ -584,9 +754,11 @@ All commands support `--json` for machine-readable output.
 
 ```json
 {
-  "error": "Insufficient balance. Available: 5.00 APE"
+  "error": "Reel Pirates requires ≥ 2.5 APE per spin. For 10 spins you need at least 25.00 APE total. Either increase the wager or reduce --spins."
 }
 ```
+
+Cascading-slot games and Speed Crash validate inputs **before** any RPC call — invalid bets surface clear errors with no gas spent.
 
 ---
 
@@ -624,7 +796,27 @@ apechurch play roulette 5 RED --loop --bet-strategy martingale --max-bet 50 --st
 
 **Important:** Always set `--max-bet` with martingale to prevent exponential loss.
 
-### Pattern 4: Session-Based Play
+### Pattern 4: Crash Hunting
+
+Hunt big multipliers on Speed Crash.
+
+```bash
+apechurch play speed-crash 5 10 --loop --max-games 50 --stop-loss 200
+```
+
+The result includes `crash_multiplier` so the agent can adapt strategy based on observed crash distribution.
+
+### Pattern 5: Cascading-Slot Bonus Buy
+
+Buy directly into the Blizzard Blitz bonus round.
+
+```bash
+apechurch play blizzard-blitz 100 --bonus-buy --json
+```
+
+Requires ≥ 100 APE wager. Returns same result schema as a normal play.
+
+### Pattern 6: Session-Based Play
 
 Play a fixed number of games per session.
 
@@ -632,7 +824,7 @@ Play a fixed number of games per session.
 apechurch play --loop --max-games 20
 ```
 
-### Pattern 5: Blackjack Grinding
+### Pattern 7: Blackjack Grinding
 
 Auto-play blackjack with optimal strategy.
 
@@ -640,7 +832,7 @@ Auto-play blackjack with optimal strategy.
 apechurch blackjack 10 --auto --loop --max-games 50 --target 200
 ```
 
-### Pattern 6: Check Before Play
+### Pattern 8: Check Before Play
 
 Always verify state before starting:
 
@@ -655,7 +847,7 @@ apechurch status --json | jq '.available_ape'
 apechurch play --loop --max-games 10
 ```
 
-### Pattern 7: Handle Pause/Resume
+### Pattern 9: Handle Pause/Resume
 
 ```bash
 # Human says "stop gambling"
@@ -678,20 +870,28 @@ apechurch status --json | jq '.paused'
 |------|--------|-------|
 | Gas per game | ~0.02-0.2 APE | Varies by game complexity |
 | VRF fee | ~0.01-0.1 APE | Randomness oracle cost |
+| Executor fee | 0.04-0.05 APE/spin | Cascading slots only (Reel Pirates, Blizzard Blitz, GOTG) |
 | Gas reserve | 1 APE | Always kept in wallet |
+
+For cascading slots, total tx value = wager + VRF fee + (spins × executor fee). All three are sent in one transaction — the CLI handles this transparently.
 
 ### Minimum Bets
 
 | Game | Minimum |
 |------|---------|
 | Most games | 1 APE |
+| Reel Pirates | 2.5 APE/spin (e.g. 10 spins = 25 APE) |
+| Blizzard Blitz | 2.5 APE/spin (or 100 APE for `--bonus-buy`) |
+| Gimboz Of The Galaxy | 3 APE/spin (or 100 APE for `--bonus-buy`) |
+| Speed Crash | 1 APE (multiplier must be ≥ 1.01x) |
 | Video Poker | 1 APE (fixed denominations) |
 
 ### Recommended Starting Balance
 
-- **Minimum:** 20 APE
-- **Recommended:** 50+ APE
-- **For martingale:** 100+ APE
+- **Minimum:** 30 APE (covers single bets on cascading slots)
+- **Recommended:** 100+ APE (for variety + bonus buys)
+- **For martingale:** 200+ APE
+- **For Blizzard Blitz / GOTG bonus buys:** 100+ APE per buy
 
 ---
 

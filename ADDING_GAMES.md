@@ -1,295 +1,370 @@
-# Adding Games to Ape Church CLI
+# Adding Games to the Ape Church CLI
 
-This guide documents everything needed to add or modify games in the `apechurch` CLI.
+This is the practical guide for adding a new single-transaction game (Roulette, Plinko, ApeStrong, etc.) to the `apechurch` CLI.
 
-## Quick Reference
-
-| File | What to Change |
-|------|----------------|
-| `registry.js` | Game definition (contract, type, config, aliases) |
-| `bin/cli.js` | Game type handler (encoding logic, VRF fee, strategy) |
-
-## Files Overview
-
-### `registry.js` - Game Definitions
-
-This is the source of truth for all games. Each game entry contains:
-
-```js
-{
-  key: 'game-key',           // Unique identifier, used in CLI
-  name: 'Display Name',      // Human-readable name
-  slug: 'url-slug',          // URL path on ape.church
-  type: 'plinko|slots|roulette|...', // Game type (determines encoding logic)
-  description: 'Description for help text',
-  contract: '0x...',         // Contract address on ApeChain
-  aliases: ['alias1'],       // Alternative names for CLI
-  config: { ... },           // Game-specific parameters (shown in help)
-  vrf: { ... },              // VRF fee configuration
-  // Game-specific extras (e.g., betTypes for roulette)
-}
-```
-
-### `bin/cli.js` - Game Logic
-
-Contains:
-1. **Strategy configs** - `getStrategyConfig()` - default behavior per strategy
-2. **Game selection** - `selectGameAndConfig()` - picks game + config for auto-play
-3. **Play logic** - `playGame()` - encodes data + sends transaction
-4. **CLI parsing** - `play` command - parses positional args per game type
+For multi-step games (Blackjack, Video Poker — anything with mid-game decisions), see [Stateful Games](#stateful-games-blackjack--video-poker) at the bottom; they live under a different module and don't follow this flow.
 
 ---
 
-## Step-by-Step: Adding a New Game
+## Architecture in 30 seconds
 
-### 1. Add to Registry (`registry.js`)
+```
+registry.js                  ← declarative game definitions (contract, type, params, VRF)
+lib/games/<type>.js          ← one module per game type — encodes call, gets VRF fee, returns result
+lib/games/base.js            ← shared: getStaticVrfFee / getPlinkoVrfFee, executeGame (tx + retry + poll)
+lib/games/index.js           ← gameHandlers + configGetters maps + dispatcher helpers
+lib/strategy.js              ← getStrategyConfig() presets, selectGameAndConfig() for autopilot
+bin/cli.js                   ← play command imports the dispatcher helpers and stays game-agnostic
+```
 
-Add a new entry to `GAME_REGISTRY`:
+The `play` command never branches on game type. It calls three helpers from `lib/games/index.js`:
+
+| Helper | What it does |
+|---|---|
+| `parsePositionalArgs(gameEntry, configArgs)` | Turns raw CLI args into a structured `positionalConfig` |
+| `resolveGameConfig(gameEntry, opts, positional, existing, strategyConfig, rng)` | Picks the right per-type getter and applies priority `opts > positional > existing > strategy` |
+| `formatGameDescription(gameEntry, gameConfig)` | Builds the suffix shown in human output (e.g. `" — RED"`) |
+
+So when you add a new game, the only files that need to change are `registry.js`, `lib/games/<type>.js`, `lib/games/index.js` (one line in each map + one switch case in two helpers), and optionally `lib/strategy.js` if it should appear in autopilot.
+
+---
+
+## Step-by-step: adding a new single-tx game
+
+Worked example: imagine adding a game called "Banana Roulette" (`type: 'bananaroulette'`) where the player picks a target slot 1–8 and bets on hitting it.
+
+### 1. Add the game to `registry.js`
 
 ```js
 {
-  key: 'new-game',
-  name: 'New Game',
-  slug: 'new-game',
-  type: 'new-type',  // or existing type if encoding matches
-  description: 'Description here',
-  contract: '0x...',
-  aliases: ['ng', 'newgame'],
+  key: 'banana-roulette',           // CLI key — what `play <key>` accepts
+  name: 'Banana Roulette',          // Display name
+  slug: 'banana-roulette',          // URL slug — must match ape.church/games/<slug>
+  type: 'bananaroulette',           // Game type — drives handler routing (see step 2)
+  description: 'Pick 1-8, hit it for 7x. Drop a banana, see what happens.',
+  contract: '0xYOUR_CONTRACT_ADDRESS_HERE',
+  aliases: ['br', 'banana'],
+
+  // Parameters surfaced in `apechurch game banana-roulette`:
   config: {
-    // Parameters shown in CLI help
-    param1: {
+    slot: {
       min: 1,
-      max: 10,
-      default: 5,
-      description: 'What this param does',
-    },
-    // Or for non-numeric params:
-    bet: {
-      description: 'What to bet on',
-      examples: ['option1', 'option2'],
+      max: 8,
+      default: 1,
+      description: 'Which slot to bet on (1-8). All slots have equal odds.',
     },
   },
-  vrf: {
-    type: 'static',  // 'static' = getVRFFee(), 'plinko' = getVRFFee(gasLimit)
-    // For plinko-style:
-    // baseGas: 289000,
-    // perUnitGas: 11000,
-  },
+
+  // Static = getVRFFee() with no args. Use 'plinko' shape (with baseGas + perUnitGas)
+  // if VRF cost scales with a parameter (number of balls, rolls, batched games, etc.)
+  vrf: { type: 'static' },
 }
 ```
 
-### 2. Add Strategy Config (`bin/cli.js`)
+### 2. Create the handler at `lib/games/bananaroulette.js`
 
-In `getStrategyConfig()`, add defaults for your game type:
-
-```js
-const configs = {
-  conservative: {
-    // ... existing ...
-    newType: { param1: [lowMin, lowMax] },  // Conservative ranges
-  },
-  balanced: {
-    newType: { param1: [midMin, midMax] },
-  },
-  aggressive: {
-    newType: { param1: [highMin, highMax] },
-  },
-  degen: {
-    newType: { param1: [extremeMin, extremeMax] },
-  },
-};
-```
-
-### 3. Add Game Selection (`bin/cli.js`)
-
-In `selectGameAndConfig()`, add handling for your type:
+Two exports: a `play*` function that builds the call and a `get*Config` function that the dispatcher uses to resolve params.
 
 ```js
-if (gameEntry.type === 'new-type') {
-  const [param1Min, param1Max] = strategyConfig.newType?.param1 || [1, 10];
-  const param1 = randomIntInclusive(param1Min, param1Max);
-  return { game: gameEntry.key, param1 };
-}
-```
+import { encodeAbiParameters } from 'viem';
+import { ensureIntRange } from '../utils.js';
+import {
+  getStaticVrfFee,
+  executeGame,
+  randomBytes32,
+  randomUint256,
+  getValidRefAddress,
+} from './base.js';
 
-### 4. Add Encoding Logic (`bin/cli.js`)
+export async function playBananaRoulette({
+  account,
+  publicClient,
+  walletClient,
+  gameEntry,
+  wager,
+  slot,
+  referral,
+  timeoutMs,
+}) {
+  const refAddress = getValidRefAddress(referral);
+  const gameId = randomUint256();
+  const userRandomWord = randomBytes32();
 
-In `playGame()`, add a new `else if` block:
+  const slotValue = ensureIntRange(
+    slot ?? gameEntry.config.slot.default,
+    'slot',
+    gameEntry.config.slot.min,
+    gameEntry.config.slot.max,
+  );
 
-```js
-} else if (gameEntry.type === 'new-type') {
-  // Get VRF fee
-  try {
-    vrfFee = await publicClient.readContract({
-      address: gameEntry.contract,
-      abi: SLOTS_VRF_ABI,  // or appropriate ABI
-      functionName: 'getVRFFee',
-    });
-  } catch (error) {
-    throw new Error(`Failed to read VRF fee: ${sanitizeError(error)}`);
-  }
+  const vrfFee = await getStaticVrfFee(publicClient, gameEntry.contract);
 
-  // Encode game data - MUST MATCH CONTRACT EXACTLY
-  encodedData = encodeAbiParameters(
+  // Must match the contract's `gameData` decode order EXACTLY.
+  const encodedData = encodeAbiParameters(
     [
-      { name: 'param1', type: 'uint8' },
+      { name: 'slot', type: 'uint8' },
       { name: 'gameId', type: 'uint256' },
       { name: 'ref', type: 'address' },
       { name: 'userRandomWord', type: 'bytes32' },
     ],
-    [param1Value, gameId, refAddress, userRandomWord]
+    [slotValue, gameId, refAddress, userRandomWord],
   );
 
-  contractAddress = gameEntry.contract;
-  gameName = gameEntry.key;
-  gameUrl = `https://www.ape.church/games/${gameEntry.slug}?id=${gameId.toString()}`;
-  config = { param1: param1Value };
+  return executeGame({
+    account,
+    publicClient,
+    walletClient,
+    contractAddress: gameEntry.contract,
+    encodedData,
+    wager,
+    vrfFee,
+    gameId,
+    gameEntry,
+    config: { slot: slotValue },
+    timeoutMs,
+  });
+}
+
+// Standard getter signature: (opts, positional, strategyConfig, randomIntInclusive, gameEntry)
+// All five args are passed by the dispatcher. Trailing args you don't need are fine to ignore.
+export function getBananaRouletteConfig(opts, positionalConfig, strategyConfig, randomIntInclusive) {
+  if (opts.slot !== undefined) return { slot: parseInt(opts.slot) };
+  if (positionalConfig.slot !== undefined) return { slot: positionalConfig.slot };
+  const [min, max] = strategyConfig.bananaRoulette?.slot || [1, 8];
+  return { slot: randomIntInclusive(min, max) };
 }
 ```
 
-### 5. Update CLI Parsing (`bin/cli.js`)
+### 3. Wire the handler into `lib/games/index.js`
 
-In the `play` command, update positional arg parsing:
+Three places to touch:
 
 ```js
-// In the positional config parsing section:
-} else if (fixedGame.type === 'new-type') {
-  if (configArgs[0]) positionalConfig.param1 = parseInt(configArgs[0]);
+// Top of file:
+import { playBananaRoulette, getBananaRouletteConfig } from './bananaroulette.js';
+
+// In gameHandlers map:
+const gameHandlers = {
+  // ... existing ...
+  bananaroulette: playBananaRoulette,
+};
+
+// In configGetters map:
+export const configGetters = {
+  // ... existing ...
+  bananaroulette: getBananaRouletteConfig,
+};
+```
+
+Then teach `parsePositionalArgs` how to interpret `apechurch play banana-roulette 10 5` (where `5` is the slot):
+
+```js
+// In parsePositionalArgs switch:
+case 'bananaroulette':
+  if (configArgs[0]) positionalConfig.slot = parseInt(configArgs[0]);
+  break;
+```
+
+And teach `formatGameDescription` how to render it in human output:
+
+```js
+// In formatGameDescription switch:
+case 'bananaroulette':
+  return ` (slot ${gameConfig.slot})`;
+```
+
+That's it for the dispatcher.
+
+### 4. Forward the new param through `playGame`
+
+`lib/games/index.js` `playGame()` currently destructures known params (`mode`, `balls`, `bet`, `picks`, `difficulty`, etc.) and passes them down. Add yours:
+
+```js
+export async function playGame({
+  account,
+  game,
+  amountApe,
+  // ... existing ...
+  slot,                      // ← add
+  timeoutMs,
+  referral,
+}) {
+  // ...
+  return handler({
+    // ... existing ...
+    slot,                    // ← add
+  });
 }
 ```
 
-And in `playOnce()`:
+And in `bin/cli.js` the `play` command passes `gameConfig.<param>` into `playGame()`. Add your field to that call too:
 
 ```js
-} else if (gameEntry.type === 'new-type') {
-  if (opts.param1 !== undefined) {
-    gameConfig.param1 = parseInt(opts.param1);
-  } else if (positionalConfig.param1 !== undefined) {
-    gameConfig.param1 = positionalConfig.param1;
-  } else if (!gameConfig.param1) {
-    // Strategy default
-    const [min, max] = strategyConfig.newType?.param1 || [1, 10];
-    gameConfig.param1 = randomIntInclusive(min, max);
-  }
+const playResponse = await playGame({
+  // ... existing ...
+  slot: gameConfig.slot,    // ← add
+});
+```
+
+(`bin/cli.js` `bet` command may also need the field added if you want it usable from the simpler `bet` interface.)
+
+### 5. (Optional) Add a CLI flag
+
+If your param has a custom name (not just `mode`/`balls`/`spins`/etc., which already have flags), add it to the `play` command's options block in `bin/cli.js`:
+
+```js
+.option('--slot <1-8>', 'Banana Roulette target slot')
+```
+
+### 6. (Optional) Make autopilot aware of your game
+
+Without this, autopilot can still _select_ your game (it's in `GAME_REGISTRY`) but param resolution will fall back to strategy defaults / the dispatcher's random fallback in step 2. To give it a real strategy-tuned shape, add a branch to `selectGameAndConfig()` in `lib/strategy.js`:
+
+```js
+if (gameEntry.type === 'bananaroulette') {
+  const cfg = strategyConfig.bananaRoulette || {};
+  const [min, max] = clampRange(
+    cfg.slot?.[0] ?? 1,
+    cfg.slot?.[1] ?? 8,
+    gameEntry.config.slot.min,
+    gameEntry.config.slot.max,
+  );
+  return { game: gameEntry.key, slot: randomIntInclusive(min, max) };
 }
 ```
 
-### 6. Add CLI Option (if needed)
-
-If your game has unique parameters, add an option to the `play` command:
+Add per-preset ranges to each strategy in `getStrategyConfig()` if you want them to differ:
 
 ```js
-.option('--param1 <value>', 'Description for new game param')
+balanced: {
+  // ...
+  bananaRoulette: { slot: [1, 8] },
+},
 ```
 
-### 7. Update Help Text
+### 7. Verify
 
-Update the `commands` help and `games` command output to include examples.
+```bash
+apechurch games                       # new game appears in the list
+apechurch game banana-roulette        # detail view renders config + multipliers
+apechurch play banana-roulette 1 5    # positional: amount=1, slot=5
+apechurch play --game banana-roulette --amount 1 --slot 5
+apechurch play banana-roulette 1 5 --json
+apechurch play banana-roulette 1 5 --loop --max-games 2
+npm run test:unit                     # no test changes needed for a new game
+```
 
 ---
 
-## Encoding Reference
+## Reference
 
-### Common Patterns
+### Standard `gameData` shape
 
-All games share these in `gameData`:
-- `gameId: uint256` - Random unique ID
-- `ref: address` - Referral address (or zero address)
-- `userRandomWord: bytes32` - User-provided randomness
+Every Ape Church contract's `play(address, bytes)` decodes `bytes` into a tuple. The last three fields are conventional and should always appear:
 
-### Existing Game Encodings
+| Field | Type | Source |
+|---|---|---|
+| (game-specific params) | varies | your handler |
+| `gameId` | `uint256` | `randomUint256()` |
+| `ref` | `address` | `getValidRefAddress(referral)` |
+| `userRandomWord` | `bytes32` | `randomBytes32()` |
 
-**Plinko:**
+Ordering and types must match the contract exactly. If they don't, the call reverts on decode.
+
+### VRF fee patterns
+
+| Type | When to use | How it's read |
+|---|---|---|
+| `static` | One random number per game (Roulette, Baccarat, ApeStrong, Keno, slots, monkey-match) | `getStaticVrfFee(publicClient, contract)` |
+| `plinko` | VRF cost scales with a param (Plinko balls, Speed Keno games, Bear-A-Dice rolls) | `getPlinkoVrfFee(publicClient, contract, baseGas + units * perUnitGas)` |
+
+If you use the dynamic shape, put `baseGas` and `perUnitGas` in the registry's `vrf` block; the handler reads them from `gameEntry.vrf`.
+
+### Existing game encodings (for reference)
+
 ```solidity
+// Plinko
 (uint8 gameMode, uint8 numBalls, uint256 gameId, address ref, bytes32 userRandomWord)
-```
 
-**Slots:**
-```solidity
+// Slots (Dino Dough, Bubblegum Heist)
 (uint256 gameId, uint8 numSpins, address ref, bytes32 userRandomWord)
+
+// Roulette (multi-bet)
+(uint8[] gameNumbers, uint256[] amounts, uint256 gameId, address ref, bytes32 userRandomWord)
+//   ↑ numbers 1-36 map to on-chain values 2-37; 0→1, 00→38; named bets 39-50.
+//   Single bets must subtract 1 wei from the amount (contract quirk).
+
+// ApeStrong
+(uint8 edgeFlipRange, uint256 gameId, address ref, bytes32 userRandomWord)
+
+// Keno
+(uint8[] gameNumbers, uint256 gameId, address ref, bytes32 userRandomWord)
+
+// Speed Keno
+// (encoded similarly — see lib/games/speedkeno.js for the exact shape)
+
+// Bear-A-Dice
+(uint8 difficulty, uint8 numRuns, uint256 gameId, address ref, bytes32 userRandomWord)
+
+// Monkey Match
+(uint8 mode, uint256 gameId, address ref, bytes32 userRandomWord)
 ```
 
-**Roulette:**
-```solidity
-(uint8[] gameNumbers, uint256[] amounts, uint256 gameId, address ref, bytes32 userRandomWord)
-```
-- `gameNumbers[i]` must match `amounts[i]` in length
-- Single bet requires subtracting 1 wei from amount (contract quirk)
+### Contract requirements
+
+Every Ape Church game must implement (these are inherited from `GameMasterClass`):
+
+1. `play(address player, bytes gameData) payable` — accepts wager + VRF fee, decodes `gameData`, requests randomness
+2. `event GameEnded(address indexed user, uint256 gameId, uint256 buyIn, uint256 payout)` — emitted on VRF resolution
+3. `getVRFFee()` or `getVRFFee(uint32 customGasLimit)` — returns the fee in wei
+4. `getEssentialGameInfo(uint256[] gameIds) view returns (address[], uint256[], uint256[], uint256[], bool[])` — used for result polling and history
+
+If your contract diverges from any of this, talk to me before adding it — `lib/games/base.js`'s `executeGame()` assumes all four.
+
+### Resolution priority for game params
+
+When the dispatcher resolves a param like `slot`, it picks the first that's defined:
+
+1. `opts.<flag>` — user passed `--slot 5`
+2. `positionalConfig.<param>` — user typed `play banana-roulette 1 5`
+3. `existingConfig.<param>` — autopilot's `selectGameAndConfig` pre-selected it
+4. Strategy random — fall back to `strategyConfig.<game>.<param>` range, or hard-coded default
+
+For mutually-exclusive params (e.g. Keno's `picks` is inferred from the count of `numbers`), the getter handles it inside itself — see `getKenoConfig` for the pattern.
 
 ---
 
-## VRF Fee Patterns
+## Stateful games (Blackjack / Video Poker)
 
-### Static (most games)
-```js
-vrfFee = await publicClient.readContract({
-  address: contract,
-  abi: SLOTS_VRF_ABI,  // getVRFFee() with no args
-  functionName: 'getVRFFee',
-});
-```
+These are fundamentally different — multiple transactions, mid-game decisions, on-chain state between actions. They live under `lib/stateful/` and have their own dedicated CLI commands rather than going through `play`. The `STATEFUL_GAME_REGISTRY` in `lib/stateful/index.js` is mostly empty because the existing two games (`blackjack`, `video-poker`) have bespoke CLI commands.
 
-### Dynamic (plinko)
-```js
-const customGasLimit = baseGas + (units * perUnitGas);
-vrfFee = await publicClient.readContract({
-  address: contract,
-  abi: PLINKO_VRF_ABI,  // getVRFFee(uint32)
-  functionName: 'getVRFFee',
-  args: [customGasLimit],
-});
-```
+If you want to add another stateful game, the existing pattern to follow is `lib/stateful/blackjack/`:
+
+- `state.js` — fetch/decode on-chain game state
+- `actions.js` — `start`, `hit`, `stand`, etc. (one transaction each)
+- `strategy.js` — auto-play decision logic
+- `display.js` — human-readable rendering
+- `index.js` — wires it together
+
+Then add a top-level command in `bin/cli.js` (mirroring `program.command('blackjack ...')`).
+
+This guide doesn't cover stateful games end-to-end — flag it and we'll design the new game's command surface together first.
 
 ---
 
 ## Checklist
 
-- [ ] Added game to `GAME_REGISTRY` in `registry.js`
-- [ ] Added strategy config in `getStrategyConfig()`
-- [ ] Added game selection in `selectGameAndConfig()`
-- [ ] Added encoding logic in `playGame()`
-- [ ] Added playGame parameter (e.g., `bet` for roulette)
-- [ ] Updated CLI positional parsing
-- [ ] Updated `playOnce()` game-specific params
-- [ ] Added CLI option if needed (e.g., `--bet`)
-- [ ] Updated `bet` command if it has unique params
-- [ ] Updated `heartbeat` command playGame call
-- [ ] Updated help text and examples
-- [ ] Tested with `apechurch games` and `apechurch game <name>`
-- [ ] Tested actual gameplay
-
----
-
-## Testing
-
-```bash
-# List all games (verify new game appears)
-apechurch games
-
-# Show game details
-apechurch game new-game
-
-# Test positional syntax
-apechurch play new-game 10 <config>
-
-# Test flag syntax
-apechurch play --game new-game --amount 10 --param1 5
-
-# Test loop mode
-apechurch play new-game 10 <config> --loop
-
-# Test JSON output
-apechurch play new-game 10 <config> --json
-```
-
----
-
-## Contract Requirements
-
-All Ape Church games must:
-1. Have `play(address player, bytes gameData)` function
-2. Emit `GameEnded(address indexed user, uint256 gameId, uint256 buyIn, uint256 payout)` event
-3. Have `getVRFFee()` or `getVRFFee(uint32)` for VRF cost
-4. Have `getEssentialGameInfo(uint256[] gameIds)` for history lookup
-
-These are defined in the `GameMasterClass` base contract.
+- [ ] Game added to `GAME_REGISTRY` in `registry.js`
+- [ ] Handler created at `lib/games/<type>.js` with `play*` and `get*Config` exports
+- [ ] Handler imported and registered in `lib/games/index.js` (`gameHandlers` + `configGetters`)
+- [ ] `parsePositionalArgs` switch updated for the new type
+- [ ] `formatGameDescription` switch updated for the new type
+- [ ] `playGame` in `lib/games/index.js` forwards any new game-specific params
+- [ ] `bin/cli.js` `play` (and `bet`, if applicable) passes the new params through
+- [ ] CLI option added if the param has a unique name
+- [ ] Autopilot branch added in `lib/strategy.js` `selectGameAndConfig` (optional but recommended)
+- [ ] Per-strategy ranges added in `getStrategyConfig()` (optional)
+- [ ] `apechurch games` lists it
+- [ ] `apechurch game <key>` shows it
+- [ ] `apechurch play <key> <amount> ...` works in fixed-game mode
+- [ ] `apechurch play --json` and `--loop` work

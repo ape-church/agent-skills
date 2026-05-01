@@ -358,6 +358,164 @@ export const GAME_REGISTRY = [
   },
 
   // ===========================================================================
+  // REEL PIRATES - Cascading slot with bonus rounds
+  // ===========================================================================
+  {
+    key: 'reel-pirates',
+    name: 'Reel Pirates',
+    slug: 'reel-pirates',
+    type: 'reelpirates',
+    description: 'Cascading slot engine with a 5-free-spin bonus round. Cascades give near-infinite payout potential — high variance.',
+    contract: '0x5E405198B349d6522BbB614E7391bDC4F4F6f681',
+    aliases: ['pirates', 'reel'],
+    config: {
+      spins: {
+        min: 1,
+        max: 15,
+        default: 10,
+        // Per-spin minimum is enforced on-chain. We mirror it here so the CLI
+        // can fail fast and so help text can show it.
+        minBetPerSpinApe: 2.5,
+        // Per-spin executor fee — paid on top of wager + VRF fee, sent in the
+        // tx value. Incentivizes bots that process the cascading game math.
+        executorFeePerSpinApe: 0.04,
+        description: 'Number of spins per bet (1-15). Wager is split across all spins. Minimum 2.5 APE per spin (e.g. 10 spins = 25 APE minimum). Plus 0.04 APE/spin executor fee.',
+      },
+    },
+    /**
+     * VRF fee calculation for Reel Pirates
+     *
+     * Cascades + bonus rounds need extra gas per spin.
+     * Formula: getVRFFee(baseGas + spins * perUnitGas)
+     */
+    vrf: {
+      type: 'reelpirates',
+      baseGas: 550000,
+      perUnitGas: 200000,
+    },
+    // Cascades + bonus rounds settle slower than typical games. Wait longer
+    // before falling back to "pending" status. The CLI reads this if set.
+    defaultTimeoutMs: 60000,
+  },
+
+  // ===========================================================================
+  // BLIZZARD BLITZ - Cascading slot with bonus-buy option
+  // ===========================================================================
+  {
+    key: 'blizzard-blitz',
+    name: 'Blizzard Blitz',
+    slug: 'blizzard-blitz',
+    type: 'blizzardblitz',
+    description: 'Cascading slot like Reel Pirates, plus the ability to BUY into the bonus round directly. Higher variance, higher ceiling.',
+    contract: '0x64b27c1c69559A795C98958614398dD7195AE1B8',
+    aliases: ['blizzard', 'blitz', 'bb'],
+    config: {
+      spins: {
+        min: 1,
+        max: 20,
+        default: 10,
+        // Per-spin minimum is enforced on-chain. We mirror it here so the CLI
+        // can fail fast and so help text can show it.
+        minBetPerSpinApe: 2.5,
+        // Bonus-buy mode: contract requires numSpins == 1 and a flat APE floor.
+        // The bonus-buy effectively divides your bet by 32x for the underlying
+        // spin math, so the floor is much higher than the per-spin minimum.
+        minBonusBuyApe: 100,
+        // Per-spin executor fee — paid on top of wager + VRF fee, sent in the
+        // tx value. Incentivizes bots that process the cascading game math.
+        // Bonus buys count as 1 spin, so 0.04 APE.
+        executorFeePerSpinApe: 0.04,
+        description: 'Number of spins per bet (1-20). Wager is split across all spins. Minimum 2.5 APE per spin. Bonus buy: --bonus-buy (or positional "bonus") with ≥ 100 APE. Plus 0.04 APE/spin executor fee.',
+      },
+    },
+    /**
+     * VRF fee calculation for Blizzard Blitz
+     *
+     * Same shape as Reel Pirates — cascades + bonus rounds need extra gas.
+     * Formula: getVRFFee(baseGas + spins * perUnitGas)
+     */
+    vrf: {
+      type: 'blizzardblitz',
+      baseGas: 550000,
+      perUnitGas: 200000,
+    },
+    // Cascades + bonus rounds settle slower than typical games.
+    defaultTimeoutMs: 60000,
+  },
+
+  // ===========================================================================
+  // GIMBOZ OF THE GALAXY - Cascading slot, lower variance than the others
+  // ===========================================================================
+  {
+    key: 'gotg',
+    name: 'Gimboz Of The Galaxy',
+    slug: 'gotg',
+    type: 'gotg',
+    description: 'Cascading slot with bonus-buy. Lower variance than Reel Pirates / Blizzard Blitz — capped at 10 spins, higher per-spin minimum.',
+    contract: '0x1AC78E6a153DeEd1b8dB67b9813991651D53E3a6',
+    aliases: ['gimboz', 'galaxy'],
+    config: {
+      spins: {
+        min: 1,
+        max: 10,
+        default: 5,
+        // Per-spin minimum is enforced on-chain. Higher than the other two
+        // cascading slots (3 APE vs 2.5).
+        minBetPerSpinApe: 3,
+        // Bonus-buy: contract requires numSpins == 1 and a flat APE floor.
+        // The bonus-buy effectively divides your bet by 32x for the underlying
+        // spin math, so the floor is much higher than the per-spin minimum.
+        minBonusBuyApe: 100,
+        // Per-spin executor fee — paid on top of wager + VRF fee, sent in the
+        // tx value. Higher than the other cascading slots (0.05 APE vs 0.04).
+        executorFeePerSpinApe: 0.05,
+        description: 'Number of spins per bet (1-10). Wager is split across all spins. Minimum 3 APE per spin (e.g. 10 spins = 30 APE minimum). Bonus buy: --bonus-buy with ≥ 100 APE. Plus 0.05 APE/spin executor fee.',
+      },
+    },
+    /**
+     * VRF fee calculation for Gimboz Of The Galaxy
+     *
+     * Same formula as Reel Pirates / Blizzard Blitz.
+     */
+    vrf: {
+      type: 'gotg',
+      baseGas: 550000,
+      perUnitGas: 200000,
+    },
+    // Cascades + bonus rounds settle slower than typical games.
+    defaultTimeoutMs: 60000,
+  },
+
+  // ===========================================================================
+  // SPEED CRASH - Crash game (pick multiplier, hope curve hits it)
+  // ===========================================================================
+  {
+    key: 'speed-crash',
+    name: 'Speed Crash',
+    slug: 'speed-crash',
+    type: 'speedcrash',
+    description: 'Crash game — pick a target multiplier (1.01x to 10,000x). Cash out at your target before the curve crashes. Higher target = lower hit chance, bigger payout.',
+    contract: '0x5B44Ce34300D1b8d32b5A6119f192e3edA74e144',
+    aliases: ['crash', 'glyder', 'glyder-crash'],
+    config: {
+      multiplier: {
+        min: 1.01,
+        max: 10000,
+        default: 2,
+        description: 'Target cash-out multiplier. Stored on-chain scaled by 10,000 (e.g. 2.5 → 25000). Min 1.01x, max 10,000x.',
+        examples: [
+          { value: 1.5, hitChance: '~66%', desc: 'Frequent small wins' },
+          { value: 2, hitChance: '~50%', desc: 'Even-money territory' },
+          { value: 5, hitChance: '~20%', desc: 'Higher variance' },
+          { value: 10, hitChance: '~10%', desc: 'High risk, high reward' },
+          { value: 100, hitChance: '~1%', desc: 'Lottery mode' },
+        ],
+      },
+    },
+    vrf: { type: 'static' },
+  },
+
+  // ===========================================================================
   // BEAR-A-DICE - Avoid unlucky dice rolls
   // ===========================================================================
   {

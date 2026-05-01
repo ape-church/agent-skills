@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2026-05-01
+
+### Added
+- **4 new games:**
+  - **Reel Pirates** (`reel-pirates`, aliases `pirates`/`reel`): cascading slot, 1-15 spins, 2.5 APE/spin minimum, 0.04 APE/spin executor fee.
+  - **Blizzard Blitz** (`blizzard-blitz`, aliases `blizzard`/`blitz`/`bb`): cascading slot with bonus-buy, 1-20 spins, 2.5 APE/spin minimum, 0.04 APE/spin executor fee. Bonus buys cost ≥ 100 APE and force 1 spin.
+  - **Gimboz Of The Galaxy** (`gotg`, aliases `gimboz`/`galaxy`): lower-variance cascading slot with bonus-buy, 1-10 spins, 3 APE/spin minimum, 0.05 APE/spin executor fee.
+  - **Speed Crash** (`speed-crash`, aliases `crash`/`glyder`/`glyder-crash`): instant-win crash game. Pick a target multiplier (1.01x-10,000x). Surfaces `crash_multiplier` and `hit` in the response so users see where the curve actually crashed.
+- **`--bonus-buy` flag** on `play` and `bet` commands for bonus-round purchases. Positional `bonus` keyword also accepted (e.g. `play blizzard-blitz 100 bonus`).
+- **`--multiplier` flag** on `play` and `bet` commands for Speed Crash. Accepts decimals or `2.5x` syntax.
+- **Per-game `defaultTimeoutMs`** — registry games can declare longer settlement windows. Cascading slots use 60s (vs 30s default) since cascades + bonus rounds settle slower.
+- **Executor fee plumbing** — `executeGame` now accepts an optional `executorFee` and adds it to the tx value. Surfaced as `executor_fee_wei` / `executor_fee_ape` in the response.
+- **Speed Crash result fields** — completed games include `target_multiplier`, `crash_multiplier`, and `hit` boolean.
+
+### Changed
+- **GP token contract migrated** from `0x8046Ac65d2A077562989B2f0770D9bB40e3078CD` to `0x0382338F3876237Ae89317A6a8207C432D430b93` (v2 contract, same ABI). `status` and `send GP` now read/transfer against the new contract. GP held on the v1 contract is no longer surfaced.
+- **`selectGameAndConfig` now handles all game types** — autopilot can size params for Speed Keno, Monkey Match, Bear-A-Dice, Reel Pirates, Blizzard Blitz, GOTG, and Speed Crash (previously only the original 6 types were covered; the others fell back to defaults).
+- **`play` JSON output spreads the full handler `result`** — game-specific fields (e.g. Speed Crash's `crash_multiplier`) now surface in `--json` output. Existing `won` and `pnl_ape` are still computed and present. New fields (`buy_in_ape`, `buy_in_wei`, `payout_wei`, `vrf_fee_*`, `executor_fee_*`, `total_value_*`) are now visible — additive change, no removals.
+- **Human play output** now shows `(crashed at 1.45x)` suffix on win/loss lines whenever a handler surfaces a crash multiplier.
+
+### Internal
+- **Consolidated cli.js per-game-type duplication** — replaced ~155 lines of `if (gameEntry.type === ...)` branches in the `play` command with three new dispatcher helpers in `lib/games/index.js`:
+  - `parsePositionalArgs(gameEntry, configArgs)` — turns raw CLI args into structured config
+  - `resolveGameConfig(gameEntry, opts, positional, existing, strategyConfig, rng)` — applies the standard priority: opts > positional > existing > strategy random
+  - `formatGameDescription(gameEntry, gameConfig)` — builds the human-output suffix
+  Adding a new game now requires zero `bin/cli.js` changes for normal cases.
+- **Standardized config-getter signatures** — all `get<Type>Config` functions now take `(opts, positional, strategyConfig, randomIntInclusive, gameEntry)`. `getPlinkoConfig` updated; `getKenoConfig` and `getSpeedKenoConfig` gained the "infer picks from numbers count" logic that previously only lived in cli.js.
+- **`ADDING_GAMES.md` fully rewritten** to reflect the modular `lib/games/<type>.js` architecture (the old version still described the pre-refactor monolithic cli.js flow).
+
+### Notes
+- The three cascading-slot handlers (`reelpirates.js`, `blizzardblitz.js`, `gotg.js`) are ~95% identical. If a fourth lands, consider extracting `lib/games/cascadingSlot.js` driven by registry data — `gameEntry.config.spins.minBonusBuyApe` already signals whether the 5-field ABI shape is needed.
+
 ## [1.2.15] - 2026-02-05
 
 ### Added

@@ -6,7 +6,7 @@ Play casino games from the command line. Perfect for AI agents, automation, and 
 
 ## Features
 
-- **12+ Games:** Roulette, Blackjack, Video Poker, Plinko, Slots, Keno, and more
+- **16+ Games:** Roulette, Blackjack, Video Poker, Plinko, Slots, Keno, Speed Crash, Reel Pirates, Blizzard Blitz, Gimboz Of The Galaxy, and more
 - **Loop Mode:** Continuous play with safety controls (target, stop-loss, max-games)
 - **Betting Strategies:** Flat, Martingale, Fibonacci, D'Alembert, Reverse Martingale
 - **AI Agent Ready:** JSON output, structured responses, self-documenting
@@ -39,6 +39,7 @@ apechurch play --loop
 | Game | Command | Description |
 |------|---------|-------------|
 | ApeStrong | `play ape-strong 10 50` | Pick-your-odds dice |
+| Speed Crash | `play speed-crash 10 2.5` | Crash game — pick a target multiplier (1.01-10,000x) |
 | Roulette | `play roulette 10 RED` | American roulette |
 | Baccarat | `play baccarat 10 BANKER` | Classic baccarat |
 | Jungle Plinko | `play jungle-plinko 10 2 50` | Drop balls for multipliers |
@@ -46,6 +47,9 @@ apechurch play --loop
 | Speed Keno | `play speed-keno 10` | Fast batched keno |
 | Dino Dough | `play dino-dough 10 10` | Slot machine |
 | Bubblegum Heist | `play bubblegum-heist 10 10` | Slot machine |
+| Reel Pirates | `play reel-pirates 25 10` | Cascading slot — min 2.5 APE/spin |
+| Blizzard Blitz | `play blizzard-blitz 25 10` | Cascading slot + `--bonus-buy` (≥ 100 APE) |
+| Gimboz Of The Galaxy | `play gotg 30 10` | Lower-variance cascading slot, min 3 APE/spin |
 | Monkey Match | `play monkey-match 10` | Poker hands from barrels |
 | Bear-A-Dice | `play bear-dice 10` | Avoid unlucky numbers |
 | Blackjack | `blackjack 10 --auto` | Card game with strategy |

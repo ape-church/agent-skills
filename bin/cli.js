@@ -142,7 +142,13 @@ import {
   selectGameAndConfig,
   computeCooldownMs,
 } from '../lib/strategy.js';
-import { playGame, resolveGame } from '../lib/games/index.js';
+import {
+  playGame,
+  resolveGame,
+  parsePositionalArgs,
+  resolveGameConfig,
+  formatGameDescription,
+} from '../lib/games/index.js';
 import { GAME_REGISTRY, listGames } from '../registry.js';
 import { getStrategy, listStrategies, getStrategyNames, calculateNextBet } from '../lib/strategies/index.js';
 import {
@@ -1004,6 +1010,8 @@ program
   .option('--range <5-95>', 'ApeStrong range', '50')
   .option('--picks <1-10>', 'Keno pick count', '5')
   .option('--numbers <nums>', 'Keno numbers (e.g., 1,7,13,25,40)')
+  .option('--bonus-buy', 'Blizzard Blitz: buy directly into the bonus round (forces 1 spin, ≥ 100 APE)')
+  .option('--multiplier <m>', 'Speed Crash target multiplier (e.g. "2.5" or "2.5x")')
   .option('--timeout <ms>', 'Max wait for result (0 = no wait)', '0')
   .action(async (opts) => {
     const account = await getWalletWithPrompt({ json: true });
@@ -1046,6 +1054,8 @@ program
         picks: opts.picks,
         numbers: opts.numbers,
         games: opts.games,
+        bonusBuy: opts.bonusBuy,
+        multiplier: opts.multiplier,
         timeoutMs,
         referral: profile.referral,
       });
@@ -1077,6 +1087,8 @@ program
   .option('--games <1-20>', 'Speed Keno game count (batching)')
   .option('--difficulty <0-4>', 'Bear-A-Dice difficulty (0=Easy, 4=Master)')
   .option('--rolls <1-5>', 'Bear-A-Dice roll count')
+  .option('--bonus-buy', 'Blizzard Blitz: buy directly into the bonus round (forces 1 spin, ≥ 100 APE)')
+  .option('--multiplier <m>', 'Speed Crash target multiplier (1.01 - 10000, e.g. "2.5" or "2.5x")')
   .option('--strategy <name>', 'conservative | balanced | aggressive | degen')
   .option('--loop', 'Play continuously')
   .option('--delay <seconds>', 'Delay between games in loop', '3')
@@ -1146,64 +1158,9 @@ program
       }
     }
     
-    // Parse positional config args based on game type
-    let positionalConfig = {};
-    if (fixedGame && configArgs && configArgs.length > 0) {
-      if (fixedGame.type === 'plinko') {
-        if (configArgs[0]) positionalConfig.mode = parseInt(configArgs[0]);
-        if (configArgs[1]) positionalConfig.balls = parseInt(configArgs[1]);
-      } else if (fixedGame.type === 'slots') {
-        if (configArgs[0]) positionalConfig.spins = parseInt(configArgs[0]);
-      } else if (fixedGame.type === 'roulette' || fixedGame.type === 'baccarat') {
-        positionalConfig.bet = configArgs.join(',');
-      } else if (fixedGame.type === 'apestrong') {
-        if (configArgs[0]) positionalConfig.range = parseInt(configArgs[0]);
-      } else if (fixedGame.type === 'keno') {
-        // For keno: configArgs can be [picks] or [numbers] or [picks, numbers]
-        // If first arg is a small number (1-10), treat as picks; otherwise as numbers
-        if (configArgs[0]) {
-          const first = configArgs[0];
-          const num = parseInt(first);
-          if (!isNaN(num) && num >= 1 && num <= 10 && !first.includes(',')) {
-            positionalConfig.picks = num;
-            if (configArgs[1]) positionalConfig.numbers = configArgs.slice(1).join(',');
-          } else {
-            // Treat as numbers
-            positionalConfig.numbers = configArgs.join(',');
-          }
-        }
-      } else if (fixedGame.type === 'speedkeno') {
-        // For speed keno: configArgs can be [games], [games, picks], [games, numbers], etc.
-        // First arg (1-20 without comma) = games, second (1-5 without comma) = picks, or numbers with comma
-        if (configArgs[0]) {
-          const first = configArgs[0];
-          const num = parseInt(first);
-          if (!isNaN(num) && num >= 1 && num <= 20 && !first.includes(',')) {
-            positionalConfig.games = num;
-            if (configArgs[1]) {
-              const second = configArgs[1];
-              const pickNum = parseInt(second);
-              if (!isNaN(pickNum) && pickNum >= 1 && pickNum <= 5 && !second.includes(',')) {
-                positionalConfig.picks = pickNum;
-                if (configArgs[2]) positionalConfig.numbers = configArgs.slice(2).join(',');
-              } else {
-                positionalConfig.numbers = configArgs.slice(1).join(',');
-              }
-            }
-          } else if (first.includes(',')) {
-            // Treat as numbers
-            positionalConfig.numbers = configArgs.join(',');
-          }
-        }
-      } else if (fixedGame.type === 'beardice') {
-        // For bear dice: configArgs can be [difficulty] or [difficulty, rolls]
-        if (configArgs[0]) positionalConfig.difficulty = parseInt(configArgs[0]);
-        if (configArgs[1]) positionalConfig.rolls = parseInt(configArgs[1]);
-      } else if (fixedGame.type === 'monkeymatch') {
-        // For monkey match: configArgs can be [mode] (1=Low Risk, 2=Normal Risk)
-        if (configArgs[0]) positionalConfig.mode = parseInt(configArgs[0]);
-      }
-    }
+    // Parse positional config args into a structured object (per-game-type semantics
+    // live in lib/games/index.js so all game-specific knowledge stays in one place).
+    const positionalConfig = fixedGame ? parsePositionalArgs(fixedGame, configArgs) : {};
 
     const profile = loadProfile();
     if (profile.paused) {
@@ -1286,158 +1243,37 @@ program
         wagerApe = calculateWager(availableApe, strategyConfig);
       }
 
-      // Determine game and config
+      // Determine game + config in one shot.
+      // - Fixed-game mode: gameEntry is whichever game the user picked, existing
+      //   pre-fill is empty, positionalConfig has the parsed CLI args.
+      // - Autopilot mode: selectGameAndConfig picks both the game and starter
+      //   params from the strategy preset; pass those as the existing pre-fill.
+      // resolveGameConfig then applies the standard priority:
+      //   opts > positional > existing > strategy random.
       let gameEntry;
-      let gameConfig = {};
-      
+      let existingConfig = {};
       if (fixedGame) {
         gameEntry = fixedGame;
-        gameConfig = { ...positionalConfig };
       } else {
         const selection = selectGameAndConfig(strategyConfig);
         gameEntry = resolveGame(selection.game);
-        gameConfig = { mode: selection.mode, balls: selection.balls, spins: selection.spins, bet: selection.bet, range: selection.range };
+        const { game: _ignored, ...rest } = selection;
+        existingConfig = rest;
       }
 
-      // Apply CLI opts/positional/strategy defaults
-      if (gameEntry.type === 'plinko') {
-        if (opts.mode !== undefined) gameConfig.mode = parseInt(opts.mode);
-        else if (positionalConfig.mode !== undefined) gameConfig.mode = positionalConfig.mode;
-        else if (gameConfig.mode === undefined) {
-          const [min, max] = strategyConfig.plinko?.mode || [0, 4];
-          gameConfig.mode = randomIntInclusive(min, max);
-        }
-        if (opts.balls !== undefined) gameConfig.balls = parseInt(opts.balls);
-        else if (positionalConfig.balls !== undefined) gameConfig.balls = positionalConfig.balls;
-        else if (gameConfig.balls === undefined) {
-          const [min, max] = strategyConfig.plinko?.balls || [10, 100];
-          gameConfig.balls = randomIntInclusive(min, max);
-        }
-      } else if (gameEntry.type === 'slots') {
-        if (opts.spins !== undefined) gameConfig.spins = parseInt(opts.spins);
-        else if (positionalConfig.spins !== undefined) gameConfig.spins = positionalConfig.spins;
-        else if (gameConfig.spins === undefined) {
-          const [min, max] = strategyConfig.slots?.spins || [1, 15];
-          gameConfig.spins = randomIntInclusive(min, max);
-        }
-      } else if (gameEntry.type === 'roulette') {
-        if (opts.bet) gameConfig.bet = opts.bet;
-        else if (positionalConfig.bet) gameConfig.bet = positionalConfig.bet;
-        else if (!gameConfig.bet) {
-          const cfg = strategyConfig.roulette || { defaultBet: 'random' };
-          gameConfig.bet = cfg.defaultBet === 'random' ? (Math.random() < 0.5 ? 'RED' : 'BLACK') : cfg.defaultBet;
-        }
-      } else if (gameEntry.type === 'baccarat') {
-        if (opts.bet) gameConfig.bet = opts.bet;
-        else if (positionalConfig.bet) gameConfig.bet = positionalConfig.bet;
-        else if (!gameConfig.bet) {
-          const cfg = strategyConfig.baccarat || { defaultBet: 'random' };
-          gameConfig.bet = cfg.defaultBet === 'random' ? (Math.random() < 0.5 ? 'PLAYER' : 'BANKER') : cfg.defaultBet;
-        }
-      } else if (gameEntry.type === 'apestrong') {
-        if (opts.range !== undefined) gameConfig.range = parseInt(opts.range);
-        else if (positionalConfig.range !== undefined) gameConfig.range = positionalConfig.range;
-        else if (gameConfig.range === undefined) {
-          const [min, max] = strategyConfig.apestrong?.range || [40, 60];
-          gameConfig.range = randomIntInclusive(min, max);
-        }
-      } else if (gameEntry.type === 'keno') {
-        // Numbers first (if provided, picks is inferred)
-        if (opts.numbers) gameConfig.numbers = opts.numbers;
-        else if (positionalConfig.numbers) gameConfig.numbers = positionalConfig.numbers;
-        // Pick count - infer from numbers if provided, otherwise use --picks or random
-        if (gameConfig.numbers && gameConfig.numbers.toLowerCase() !== 'random') {
-          // Infer picks from number of values provided
-          gameConfig.picks = gameConfig.numbers.split(',').filter(s => s.trim()).length;
-        } else if (opts.picks !== undefined) {
-          gameConfig.picks = parseInt(opts.picks);
-        } else if (positionalConfig.picks !== undefined) {
-          gameConfig.picks = positionalConfig.picks;
-        } else if (gameConfig.picks === undefined) {
-          const [min, max] = strategyConfig.keno?.picks || [3, 6];
-          gameConfig.picks = randomIntInclusive(min, max);
-        }
-      } else if (gameEntry.type === 'speedkeno') {
-        // Number of games (batching)
-        if (opts.games !== undefined) gameConfig.games = parseInt(opts.games);
-        else if (positionalConfig.games !== undefined) gameConfig.games = positionalConfig.games;
-        else if (gameConfig.games === undefined) {
-          const [min, max] = strategyConfig.speedKeno?.games || [5, 10];
-          gameConfig.games = randomIntInclusive(min, max);
-        }
-        // Numbers first (if provided, picks is inferred)
-        if (opts.numbers) gameConfig.numbers = opts.numbers;
-        else if (positionalConfig.numbers) gameConfig.numbers = positionalConfig.numbers;
-        // Pick count - infer from numbers if provided, otherwise use --picks or random
-        if (gameConfig.numbers && gameConfig.numbers.toLowerCase() !== 'random') {
-          // Infer picks from number of values provided
-          gameConfig.picks = gameConfig.numbers.split(',').filter(s => s.trim()).length;
-        } else if (opts.picks !== undefined) {
-          gameConfig.picks = parseInt(opts.picks);
-        } else if (positionalConfig.picks !== undefined) {
-          gameConfig.picks = positionalConfig.picks;
-        } else if (gameConfig.picks === undefined) {
-          const [min, max] = strategyConfig.speedKeno?.picks || [2, 4];
-          gameConfig.picks = randomIntInclusive(min, max);
-        }
-      } else if (gameEntry.type === 'beardice') {
-        // Difficulty (0-4, default to Easy=0 for safety)
-        // Auto-play: 90% Easy, 10% Normal. Never Hard/Extreme/Master.
-        if (opts.difficulty !== undefined) gameConfig.difficulty = parseInt(opts.difficulty);
-        else if (positionalConfig.difficulty !== undefined) gameConfig.difficulty = positionalConfig.difficulty;
-        else if (gameConfig.difficulty === undefined) {
-          // 90% Easy, 10% Normal - never pick 2+ in auto-play
-          gameConfig.difficulty = Math.random() < 0.9 ? 0 : 1;
-        }
-        // Number of rolls (1-5, but Extreme/Master capped at 3)
-        // On Easy (0), allow more rolls since 5/6 win chance per roll
-        if (opts.rolls !== undefined) gameConfig.rolls = parseInt(opts.rolls);
-        else if (positionalConfig.rolls !== undefined) gameConfig.rolls = positionalConfig.rolls;
-        else if (gameConfig.rolls === undefined) {
-          const isEasy = gameConfig.difficulty === 0;
-          const [min, max] = strategyConfig.bearDice?.rolls || (isEasy ? [1, 5] : [1, 2]);
-          gameConfig.rolls = randomIntInclusive(min, max);
-        }
-        // Cap rolls at 3 for Extreme (3) and Master (4) - contract limit
-        if (gameConfig.difficulty >= 3 && gameConfig.rolls > 3) {
-          gameConfig.rolls = 3;
-        }
-      } else if (gameEntry.type === 'monkeymatch') {
-        // Mode (1=Low Risk, 2=Normal Risk)
-        if (opts.mode !== undefined) gameConfig.mode = parseInt(opts.mode);
-        else if (positionalConfig.mode !== undefined) gameConfig.mode = positionalConfig.mode;
-        else if (gameConfig.mode === undefined) {
-          // 70% Low Risk, 30% Normal Risk for auto-play
-          gameConfig.mode = Math.random() < 0.7 ? 1 : 2;
-        }
-        // Clamp to valid range
-        if (gameConfig.mode < 1) gameConfig.mode = 1;
-        if (gameConfig.mode > 2) gameConfig.mode = 2;
-      }
+      const gameConfig = resolveGameConfig(
+        gameEntry,
+        opts,
+        positionalConfig,
+        existingConfig,
+        strategyConfig,
+        randomIntInclusive,
+      );
 
       const wagerApeString = formatApeAmount(wagerApe);
 
       // Build description for human output
-      let gameDesc = gameEntry.name;
-      if (gameEntry.type === 'plinko') {
-        gameDesc += ` (mode ${gameConfig.mode}, ${gameConfig.balls} balls)`;
-      } else if (gameEntry.type === 'slots') {
-        gameDesc += ` (${gameConfig.spins} spins)`;
-      } else if (gameEntry.type === 'roulette' || gameEntry.type === 'baccarat') {
-        gameDesc += ` — ${gameConfig.bet}`;
-      } else if (gameEntry.type === 'apestrong') {
-        gameDesc += ` (${gameConfig.range}% chance)`;
-      } else if (gameEntry.type === 'keno') {
-        gameDesc += ` (${gameConfig.picks} picks)`;
-      } else if (gameEntry.type === 'speedkeno') {
-        gameDesc += ` (${gameConfig.games} games, ${gameConfig.picks} picks)`;
-      } else if (gameEntry.type === 'beardice') {
-        const diffNames = ['Easy', 'Normal', 'Hard', 'Extreme', 'Master'];
-        gameDesc += ` (${diffNames[gameConfig.difficulty] || 'Easy'}, ${gameConfig.rolls} rolls)`;
-      } else if (gameEntry.type === 'monkeymatch') {
-        const modeNames = { 1: 'Low Risk', 2: 'Normal Risk' };
-        gameDesc += ` (${modeNames[gameConfig.mode] || 'Low Risk'})`;
-      }
+      const gameDesc = `${gameEntry.name}${formatGameDescription(gameEntry, gameConfig)}`;
 
       // Human-friendly output: show what we're playing
       if (!opts.json) {
@@ -1460,7 +1296,11 @@ program
           games: gameConfig.games,
           difficulty: gameConfig.difficulty,
           rolls: gameConfig.rolls,
-          timeoutMs: 30000, // Wait up to 30s for result (usually 1-2s)
+          bonusBuy: gameConfig.bonusBuy,
+          multiplier: gameConfig.multiplier,
+          // Most games settle in 1-2s; 30s is plenty. Games with longer settlement
+          // (e.g. Reel Pirates' cascades) declare their own timeout in the registry.
+          timeoutMs: gameEntry.defaultTimeoutMs ?? 30000,
           referral: freshProfile.referral,
         });
 
@@ -1500,8 +1340,11 @@ program
             game_url: playResponse.game_url,
             wager_ape: wagerApeString,
             config: playResponse.config,
+            // Spread the full handler result so any game-specific fields
+            // (e.g. Speed Crash's crash_multiplier/hit) surface in JSON output.
+            // won + pnl_ape are computed here and override any name collision.
             result: playResponse.result ? {
-              payout_ape: playResponse.result.payout_ape,
+              ...playResponse.result,
               won,
               pnl_ape: pnlApe.toFixed(6),
             } : null,
@@ -1511,15 +1354,20 @@ program
           if (hasResult) {
             const payoutApe = parseFloat(playResponse.result.payout_ape);
             const wagerApeNum = parseFloat(wagerApeString);
+            // Generic suffix for any game whose handler surfaces a crash multiplier
+            // (currently just Speed Crash). Renders as " (crashed at 1.45x)".
+            const crashSuffix = playResponse.result.crash_multiplier
+              ? ` ${theme.dim(`(crashed at ${playResponse.result.crash_multiplier})`)}`
+              : '';
             if (won) {
-              console.log(`${theme.win('🎉 WON!')} ${theme.amount(`${wagerApeNum.toFixed(2)} APE`)} → ${theme.balance(`${payoutApe.toFixed(2)} APE`)} ${theme.positive(`(+${pnlApe.toFixed(2)} APE)`)}\n`);
+              console.log(`${theme.win('🎉 WON!')} ${theme.amount(`${wagerApeNum.toFixed(2)} APE`)} → ${theme.balance(`${payoutApe.toFixed(2)} APE`)} ${theme.positive(`(+${pnlApe.toFixed(2)} APE)`)}${crashSuffix}\n`);
             } else if (payoutApe > 0) {
               // Partial loss - got some back
               const lostApe = Math.abs(pnlApe);
-              console.log(`${theme.loss('❌ Lost')} ${theme.negative(`${lostApe.toFixed(2)} APE`)} ${theme.dim(`(${wagerApeNum.toFixed(2)} → ${payoutApe.toFixed(2)} APE)`)}\n`);
+              console.log(`${theme.loss('❌ Lost')} ${theme.negative(`${lostApe.toFixed(2)} APE`)} ${theme.dim(`(${wagerApeNum.toFixed(2)} → ${payoutApe.toFixed(2)} APE)`)}${crashSuffix}\n`);
             } else {
               // Total loss
-              console.log(`${theme.loss('❌ Lost')} ${theme.negative(`${wagerApeNum.toFixed(2)} APE`)} ${theme.dim('— better luck next time!')}\n`);
+              console.log(`${theme.loss('❌ Lost')} ${theme.negative(`${wagerApeNum.toFixed(2)} APE`)} ${theme.dim('— better luck next time!')}${crashSuffix}\n`);
             }
           } else {
             // Result pending (rare - if event didn't fire in time)
