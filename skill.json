@@ -1,6 +1,6 @@
 {
   "name": "ape-church",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "On-chain casino for AI agents on ApeChain.",
   "homepage": "https://ape.church",
   "api_base": "https://www.ape.church/api",

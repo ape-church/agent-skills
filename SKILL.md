@@ -92,6 +92,7 @@ apechurch play --loop
 | Reel Pirates | `play reel-pirates 25 10` | Cascade Slot | `--spins 1-15` (≥ 2.5 APE/spin) |
 | Blizzard Blitz | `play blizzard-blitz 25 10` | Cascade Slot | `--spins 1-20` `--bonus-buy` (≥ 2.5 APE/spin) |
 | Gimboz Of The Galaxy | `play gotg 30 10` | Cascade Slot | `--spins 1-10` `--bonus-buy` (≥ 3 APE/spin) |
+| Dojo Drop | `play dojo-drop 25 10` | Cascade Slot | `--spins 1-15` (≥ 2.5 APE/spin) |
 | Monkey Match | `play monkey-match 10` | Match | `--mode 1-2` |
 | Bear-A-Dice | `play bear-dice 10` | Dice | `--difficulty 0-4` `--rolls 1-5` |
 | Blackjack | `blackjack 10 --auto` | Cards | Interactive or `--auto` |
@@ -346,6 +347,24 @@ apechurch play gotg 100 --bonus-buy    # Buy bonus round (1 spin, ≥ 100 APE)
 | `--bonus-buy` | flag | Buy directly into bonus round (forces 1 spin) |
 
 **Per-spin minimum:** 3 APE — higher than the other cascading slots.
+
+---
+
+### Dojo Drop (Cascading Slot)
+
+Same cascading engine and per-spin floor as Reel Pirates, but no bonus buy. Cheapest VRF and executor fee of the cascading slots.
+
+```bash
+apechurch play dojo-drop <amount> <spins>
+apechurch play dojo-drop 25 10    # 25 APE, 10 spins (2.5 APE/spin minimum)
+apechurch play dojo-drop 50 5     # 50 APE, 5 spins (10 APE/spin)
+```
+
+| Parameter | Range | Description |
+|-----------|-------|-------------|
+| spins | 1-15 | Spins per bet (wager split) |
+
+**Per-spin minimum:** 2.5 APE. Plus a 0.03 APE/spin executor fee on top of the wager and VRF fee.
 **Bonus-buy minimum:** 100 APE.
 **Executor fee:** 0.05 APE/spin — highest of the cascading slots.
 **Settlement:** Up to 60 seconds.
@@ -883,6 +902,7 @@ For cascading slots, total tx value = wager + VRF fee + (spins × executor fee).
 | Reel Pirates | 2.5 APE/spin (e.g. 10 spins = 25 APE) |
 | Blizzard Blitz | 2.5 APE/spin (or 100 APE for `--bonus-buy`) |
 | Gimboz Of The Galaxy | 3 APE/spin (or 100 APE for `--bonus-buy`) |
+| Dojo Drop | 2.5 APE/spin (e.g. 10 spins = 25 APE) |
 | Speed Crash | 1 APE (multiplier must be ≥ 1.01x) |
 | Video Poker | 1 APE (fixed denominations) |
 

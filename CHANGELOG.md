@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.0] - 2026-07-31
+
+### Added
+- **Dojo Drop** (`dojo-drop`, aliases `dojo`/`drop`/`dd`): cascading slot in the Reel Pirates family, 1-15 spins, 2.5 APE/spin minimum, 0.03 APE/spin executor fee. No bonus buy — the contract's `gameData` has 4 fields (`numSpins`, `gameId`, `ref`, `userRandomWord`), not the 5-field shape used by Blizzard Blitz / GOTG. Cheapest VRF of the cascading slots (`BASE_GAS` 500k, `GAS_PER_RUN` 150k). Contract `0x914d11f805586dF8Ed440Fe23dcdce929965FBb1`.
+- Autopilot support for Dojo Drop across all four strategy presets (conservative 10-15 spins, balanced 7-12, aggressive 4-8, degen 1-4).
+
 ## [1.3.0] - 2026-05-01
 
 ### Added

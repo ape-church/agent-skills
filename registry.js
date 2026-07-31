@@ -487,6 +487,47 @@ export const GAME_REGISTRY = [
   },
 
   // ===========================================================================
+  // DOJO DROP - Cascading slot, no bonus buy
+  // ===========================================================================
+  {
+    key: 'dojo-drop',
+    name: 'Dojo Drop',
+    slug: 'dojo-drop',
+    type: 'dojodrop',
+    description: 'Cascading slot in the Reel Pirates family. No bonus buy — cheapest VRF and executor fee of the cascading slots.',
+    contract: '0x914d11f805586dF8Ed440Fe23dcdce929965FBb1',
+    aliases: ['dojo', 'drop', 'dd'],
+    config: {
+      spins: {
+        min: 1,
+        max: 15,
+        default: 10,
+        // Per-spin minimum is enforced on-chain. We mirror it here so the CLI
+        // can fail fast and so help text can show it.
+        minBetPerSpinApe: 2.5,
+        // Per-spin executor fee — paid on top of wager + VRF fee, sent in the
+        // tx value. Matches the contract's EXECUTOR_FEE (0.03 APE).
+        executorFeePerSpinApe: 0.03,
+        description: 'Number of spins per bet (1-15). Wager is split across all spins. Minimum 2.5 APE per spin (e.g. 10 spins = 25 APE minimum). Plus 0.03 APE/spin executor fee.',
+      },
+    },
+    /**
+     * VRF fee calculation for Dojo Drop
+     *
+     * Same formula as the other cascading slots, but cheaper constants —
+     * matches the contract's BASE_GAS (500k) and GAS_PER_RUN (150k).
+     * Formula: getVRFFee(baseGas + spins * perUnitGas)
+     */
+    vrf: {
+      type: 'dojodrop',
+      baseGas: 500000,
+      perUnitGas: 150000,
+    },
+    // Cascades settle slower than typical games.
+    defaultTimeoutMs: 60000,
+  },
+
+  // ===========================================================================
   // SPEED CRASH - Crash game (pick multiplier, hope curve hits it)
   // ===========================================================================
   {
